@@ -1,0 +1,363 @@
+# Ce fichier docker-compose.yml définit la configuration de notre application d'observabilité composée de plusieurs services :
+# Loki pour les logs, Prometheus pour les métriques, Grafana pour les dashboards et Alertmanager pour la gestion des alertes.
+# Il utilise Docker Compose pour orchestrer le déploiement de ces services dans des containers Docker.
+
+
+# On crée un réseau privé nommé observabilite.
+# Le driver bridge est le réseau par défaut — il crée un réseau isolé où les containers peuvent se parler par nom.
+networks:
+  observabilite:
+    driver: bridge
+
+# On déclare ici tous les volumes nommés qu'on utilisera pour stocker les données de nos services.
+# Les volumes permettent de persister les données même si les containers sont arrêtés ou supprimés.
+volumes:
+  loki-data: # Les logs stockés par Loki
+  prometheus-data: # Les métriques collectées par Prometheus
+  grafana-data: # Les dashboards qui serons créer
+  tempo-data: # Les traces collectées par Tempo
+  # Volumes de logs séparés par service — simule des serveurs Linux distincts
+  middle-logs:
+  addon-voucher-logs:
+  addon-partenaire-logs:
+  backoffice-logs:
+  addons-om-logs:
+  addons-wave-logs:
+
+
+# On définit ici les services qui composent notre application. Chaque service correspond à un container Docker.
+services:
+
+  loki:
+    # le "plan de construction" du container, téléchargé depuis Docker Hub. Pour Loki c'est grafana/loki:2.9.0
+    image: grafana/loki:2.9.0
+
+    # le nom du container une fois lancé. Ça permet de faire docker logs loki plutôt que docker logs a3f8c2...
+    container_name: loki
+
+    # on connecte ce container au réseau observabilite déclaré plus haut pour qu'il puisse communiquer avec les autres services
+    networks:
+      - observabilite
+
+    # on expose le port 3100 de Loki pour pouvoir y accéder depuis l'extérieur du container (notamment pour Grafana qui va se connecter à Loki sur ce port)
+    ports:
+      - "3100:3100"
+
+    # on monte des volumes pour stocker les données de Loki et pour lui fournir sa configuration.
+    # Le fichier de config est monté en lecture seule (ro) pour éviter qu'il soit modifié par le container.
+    volumes:
+      - loki-data:/loki # volume pour stocker les données de Loki, on le monte dans le container à l'emplacement /loki
+      - ./infra/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro # on monte le fichier de configuration de Loki depuis notre machine hôte vers le container(en lecture seule)
+
+    # la commande à exécuter pour démarrer Loki, en lui indiquant où trouver son fichier de configuration.
+    command: -config.file=/etc/loki/local-config.yaml
+
+
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: prometheus
+    networks:
+      - observabilite
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus # volume pour stocker les données de Prometheus, monté dans le container à l'emplacement /prometheus
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro # on monte le fichier de configuration de Prometheus depuis notre machine hôte vers le container(en lecture seule)
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro # on monte le dossier contenant les règles d'alerte de Prometheus, en lecture seule
+    
+    # la commande pour démarrer Prometheus en lui indiquant où trouver son fichier de configuration et en configurant la rétention des données à 30 jours.
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    networks:
+      - observabilite
+    ports:
+      - "3001:3000"
+
+    # les variables d'environnement pour configurer Grafana.
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin # le nom d'utilisateur admin par défaut
+      - GF_SECURITY_ADMIN_PASSWORD=admin123 # le mot de passe admin par défaut (à changer en production)
+      - GF_SECURITY_ALLOW_EMBEDDING=true # permet d'intégrer les dashboards Grafana dans d'autres applications
+      - GF_SERVER_ROOT_URL=http://localhost:3000 #  utilise localhost au lieu du hostname Docker interne (pour rendre le button de redirection des mails valide)[ en environnement réel, remplace localhost par l'IP ou le hostname du serveur Grafana, par exemple http://192.168.1.50:3000 ou https://grafana.monentreprise.com]
+
+    # les volumes pour stocker les données de Grafana et pour lui fournir la configuration de provisioning des datasources et des dashboards.
+    volumes:
+      - grafana-data:/var/lib/grafana # volume pour stocker les données de Grafana, monté dans le container à l'emplacement /var/lib/grafana qui est le répertoire par défaut où Grafana stocke ses données
+      # Grafana lit automatiquement les fichiers de ce dossier au démarrage pour configurer les datasources et les dashboards.
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro # on monte le dossier de provisioning de Grafana depuis notre machine hôte vers le container(en lecture seule)
+      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/provisioning/alerting:/etc/grafana/provisioning/alerting:ro
+      - ./infra/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+
+    # indique que Grafana doit démarrer après Loki, Prometheus et Tempo pour s'assurer qu'ils sont disponibles quand Grafana essaie de se connecter à eux.
+    depends_on: 
+      - loki
+      - prometheus
+      - tempo
+
+
+  tempo:
+    image: grafana/tempo:2.0.0
+    container_name: tempo
+    networks:
+      - observabilite
+    ports:
+      - "3200:3200"   # HTTP API
+      - "4317:4317"   # gRPC OTLP receiver
+      - "4318:4318"   # HTTP OTLP receiver
+    volumes:
+      - tempo-data:/var/tempo
+      - ./infra/tempo/tempo.yaml:/etc/tempo.yaml:ro
+    command: -config.file=/etc/tempo.yaml
+
+
+  alertmanager:
+    image: prom/alertmanager:v0.26.0 # l'image officielle d'Alertmanager, qui est un composant de Prometheus pour gérer les alertes.
+    container_name: alertmanager
+    networks:
+      - observabilite # on connecte Alertmanager au même réseau que les autres services pour qu'il puisse communiquer avec Prometheus et Grafana
+    ports:
+      - "9093:9093" # on expose le port 9093 d'Alertmanager pour pouvoir y accéder depuis l'extérieur du container (notamment pour Prometheus qui va se connecter à Alertmanager sur ce port)
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro # on monte le fichier de configuration d'Alertmanager depuis notre machine hôte vers le container(en lecture seule)
+      - ./infra/alertmanager/templates:/etc/alertmanager/templates:ro # on monte le dossier contenant les templates personnalisés pour les emails d'alerte
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml" # la commande pour démarrer Alertmanager en lui indiquant où trouver son fichier de configuration
+      - "--web.external-url=http://localhost:9093" #
+
+
+# --- SERVICES SIMULÉS (MOCKS) ---
+# Ces services simulent des applications réelles qui génèrent des logs et des traces. Ils sont utilisés pour tester notre pipeline d'observabilité avec des données réalistes.
+
+
+# MOCK MIDDLE — simule une application intermédiaire qui reçoit des requêtes, fait du scheduling et appelle d'autres services
+# Logs écrits dans middle-logs, format avec codes ANSI pour simuler des logs colorés
+  mock-middle:
+    # on construit une image Docker à partir du Dockerfile situé dans le dossier mock-servers/middle, qui contient un serveur de test pour simuler l'envoi de logs à Fluent Bit
+    build:
+      context: ./mock-servers        # contexte = dossier parent
+      dockerfile: Dockerfile         # Dockerfile partagé
+      args:
+        SERVICE_DIR: middle          # seul ce paramètre change
+    container_name: mock-middle
+    networks:
+      - observabilite
+    volumes:
+      # volume partagé avec Fluent Bit — le mock écrit ses logs ici,
+      # Fluent Bit les lira depuis le même endroit, exactement comme sur un vrai serveur Linux
+      - middle-logs:/logs/middle
+    ports:
+      - "8081:8080"
+    environment:
+      - SERVICE_NAME=middle
+      - ENV_NAME=dev
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318/v1/traces
+    depends_on:
+      - tempo
+
+
+  # MOCK ADDON-VOUCHER — simule le service de gestion des vouchers
+  # Logs écrits dans le volume addon-voucher-logs
+  # Format : codes ANSI + séparateur "..................."
+  mock-addon-voucher:
+    build:
+      context: ./mock-servers
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: addon-voucher
+    container_name: mock-addon-voucher
+    networks:
+      - observabilite
+    volumes:
+      - addon-voucher-logs:/logs/addon-voucher
+    ports:
+      - "8082:8080"
+    environment:
+      - SERVICE_NAME=addon-voucher
+      - ENV_NAME=dev
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318/v1/traces
+    depends_on:
+      - tempo
+
+# MOCK ADDON-PARTENAIRE — simule un service de partenaires externes
+  # Logs écrits dans le volume addon-partenaire-logs
+  # Format : JSON avec champs timestamp, level, message, service, env
+  mock-addon-partenaire:
+    build:
+      context: ./mock-servers
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: addon-partenaire
+    container_name: mock-addon-partenaire
+    networks:
+      - observabilite
+    volumes:
+      - addon-partenaire-logs:/logs/addon-partenaire
+    ports:
+      - "8083:8080"
+    environment:
+      - SERVICE_NAME=addon-partenaire
+      - ENV_NAME=dev
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318/v1/traces
+    depends_on:
+      - tempo
+
+
+  # MOCK BACKOFFICE — simule le backoffice PHP/Laravel
+  # Logs écrits dans backoffice-logs, format [YYYY-MM-DD HH:MM:SS] production.LEVEL: message
+  # Pas d'OTel, pas d'Actuator (PHP natif)
+  mock-backoffice:
+    build:
+      context: ./mock-servers
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: backoffice
+    container_name: mock-backoffice
+    networks:
+      - observabilite
+    volumes:
+      - backoffice-logs:/logs/backoffice
+    ports:
+      - "8084:8080"
+    environment:
+      - SERVICE_NAME=backoffice
+      - ENV_NAME=dev
+    # Pas de port exposé (pas d'Actuator ni OTel)
+    # Pas de depends_on tempo (pas d'OTel)
+
+
+  # MOCK ADDONS-OM — simule le service Orange Money (Spring Boot, port 8888)
+  # Logs écrits dans addons-om-logs, format logback standard
+  # Actuator exposé sur 8080 → Prometheus scrape
+  mock-addons-om:
+    build:
+      context: ./mock-servers
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: addons-om
+    container_name: mock-addons-om
+    networks:
+      - observabilite
+    volumes:
+      - addons-om-logs:/logs/addons-om
+    ports:
+      - "8085:8080"
+    environment:
+      - SERVICE_NAME=addons-om
+      - ENV_NAME=dev
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318/v1/traces
+    depends_on:
+      - tempo
+
+
+  # MOCK ADDONS-WAVE — simule le service Wave (Spring Boot, port 8989)
+  # Logs écrits dans addons-wave-logs, format logback standard
+  # Actuator exposé sur 8080 → Prometheus scrape
+  mock-addons-wave:
+    build:
+      context: ./mock-servers
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: addons-wave
+    container_name: mock-addons-wave
+    networks:
+      - observabilite
+    volumes:
+      - addons-wave-logs:/logs/addons-wave
+    ports:
+      - "8086:8080"
+    environment:
+      - SERVICE_NAME=addons-wave
+      - ENV_NAME=dev
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318/v1/traces
+    depends_on:
+      - tempo
+
+
+  fluent-bit:
+    image: fluent/fluent-bit:2.2.0
+    container_name: fluent-bit
+    networks:
+      - observabilite
+    # Ces variables sont injectées dans le container au démarrage
+    # C'est ici et uniquement ici qu'on définit l'identité du service surveillé
+    environment:
+      # --- Pipeline middle ---
+      - SERVICE_NAME=middle
+      - MIDDLE_HOST_NAME=mock-middle
+      - BATCH_THREAD_PATTERN=^scheduling-.*
+
+      # --- Pipeline addon-voucher ---
+      - ADDON_VOUCHER_SERVICE_NAME=addon-voucher
+      - ADDON_VOUCHER_HOST_NAME=mock-addon-voucher
+      - ADDON_VOUCHER_BATCH_PATTERN=^scheduling-.*
+
+      # --- Pipeline addon-partenaire ---
+      - ADDON_PARTENAIRE_SERVICE_NAME=addon-partenaire
+      - ADDON_PARTENAIRE_HOST_NAME=mock-addon-partenaire
+
+      # --- Pipeline backoffice ---
+      - BACKOFFICE_SERVICE_NAME=backoffice
+      - BACKOFFICE_HOST_NAME=mock-backoffice
+
+      # --- Pipeline addons-om ---
+      - ADDONS_OM_SERVICE_NAME=addons-om
+      - ADDONS_OM_HOST_NAME=mock-addons-om
+
+      # --- Pipeline addons-wave ---
+      - ADDONS_WAVE_SERVICE_NAME=addons-wave
+      - ADDONS_WAVE_HOST_NAME=mock-addons-wave
+
+      # --- Pipeline for all ---
+      - ENV_NAME=dev
+    volumes:
+      # Accès en lecture aux logs des services
+      - middle-logs:/logs/middle:ro
+      - addon-voucher-logs:/logs/addon-voucher:ro
+      - addon-partenaire-logs:/logs/addon-partenaire:ro
+      - backoffice-logs:/logs/backoffice:ro
+      - addons-om-logs:/logs/addons-om:ro
+      - addons-wave-logs:/logs/addons-wave:ro
+      
+      # Configuration Fluent Bit
+      - ./infra/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./infra/fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      - ./infra/fluent-bit/mask_secrets.lua:/fluent-bit/etc/mask_secrets.lua:ro
+    depends_on:
+      - loki
+      - mock-middle
+      - mock-addon-voucher
+      - mock-addon-partenaire
+      - mock-backoffice
+      - mock-addons-om
+      - mock-addons-wave
+
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: node-exporter
+    networks:
+      - observabilite
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.24.0
+    container_name: blackbox-exporter
+    networks:
+      - observabilite
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./infra/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro

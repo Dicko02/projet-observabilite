@@ -1,0 +1,131 @@
+{{ define "email.custom.subject" }}
+[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .GroupLabels.alertname }}{{ if .CommonLabels.service }} - {{ .CommonLabels.service }}{{ end }}
+{{ end }}
+
+{{ define "email.custom.html" }}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+    .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .header { padding: 20px 30px; color: white; background: {{ if eq .Status "resolved" }}#2e7d32{{ else if eq (index .Alerts.Firing 0).Labels.severity "critical" }}#c62828{{ else }}#e65100{{ end }}; }
+    .header h1 { margin: 0; font-size: 20px; }
+    .header p { margin: 5px 0 0; opacity: 0.9; font-size: 14px; }
+    .body { padding: 24px 30px; }
+    .status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold; margin-bottom: 16px; background: {{ if eq .Status "resolved" }}#e8f5e9; color: #2e7d32{{ else }}#ffebee; color: #c62828{{ end }}; }
+    .alert-card { border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 16px; overflow: hidden; }
+    .alert-card-header { padding: 12px 16px; background: #f5f5f5; font-weight: bold; font-size: 14px; border-bottom: 1px solid #e0e0e0; }
+    .alert-card-body { padding: 12px 16px; }
+    .label-row { display: flex; margin-bottom: 6px; font-size: 13px; }
+    .label-key { color: #666; width: 120px; flex-shrink: 0; }
+    .label-value { color: #333; font-weight: 500; }
+    .detail-box { border-radius: 0 4px 4px 0; padding: 10px 14px; margin-top: 10px; font-size: 13px; line-height: 1.6; }
+    .detail-firing { background: #fff8e1; border-left: 3px solid #f57f17; color: #333; }
+    .detail-resolved { background: #e8f5e9; border-left: 3px solid #2e7d32; color: #1b5e20; }
+    .query-box { background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; padding: 8px 12px; margin-top: 8px; font-family: monospace; font-size: 12px; color: #1565c0; word-break: break-all; }
+    .footer { padding: 16px 30px; background: #f5f5f5; text-align: center; font-size: 12px; color: #888; border-top: 1px solid #e0e0e0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{{ if eq .Status "resolved" }}✅ Alerte résolue{{ else }}🚨 Alerte déclenchée{{ end }}</h1>
+      <p>{{ .GroupLabels.alertname }}{{ if .CommonLabels.service }} — {{ .CommonLabels.service }}{{ end }}</p>
+    </div>
+    <div class="body">
+      <span class="status-badge">{{ .Status | toUpper }}{{ if eq .Status "firing" }} · {{ .Alerts.Firing | len }} alerte(s){{ end }}</span>
+
+      {{ range .Alerts }}
+      <div class="alert-card">
+        <div class="alert-card-header">
+          {{ if eq .Status "resolved" }}✅{{ else }}🚨{{ end }}
+          {{ .Labels.alertname }}
+        </div>
+        <div class="alert-card-body">
+
+          {{- /* Labels présents seulement si non vides */}}
+          {{ if .Labels.service }}
+          <div class="label-row">
+            <span class="label-key">Service</span>
+            <span class="label-value">{{ .Labels.service }}</span>
+          </div>
+          {{ end }}
+          {{ if .Labels.host }}
+          <div class="label-row">
+            <span class="label-key">Serveur</span>
+            <span class="label-value">{{ .Labels.host }}</span>
+          </div>
+          {{ end }}
+          {{ if .Labels.instance }}
+          <div class="label-row">
+            <span class="label-key">Instance</span>
+            <span class="label-value">{{ .Labels.instance }}</span>
+          </div>
+          {{ end }}
+          {{ if .Labels.endpoint }}
+          <div class="label-row">
+            <span class="label-key">Endpoint</span>
+            <span class="label-value">{{ .Labels.endpoint }}</span>
+          </div>
+          {{ end }}
+
+          <div class="label-row">
+            <span class="label-key">Sévérité</span>
+            <span class="label-value">{{ .Labels.severity }}</span>
+          </div>
+          <div class="label-row">
+            <span class="label-key">Environnement</span>
+            <span class="label-value">{{ .Labels.env }}</span>
+          </div>
+          <div class="label-row">
+            <span class="label-key">Type</span>
+            <span class="label-value">{{ .Labels.type }}</span>
+          </div>
+          <div class="label-row">
+            <span class="label-key">Début</span>
+            <span class="label-value">{{ .StartsAt.Format "02/01/2006 15:04:05" }}</span>
+          </div>
+          {{ if .EndsAt }}{{ if not .EndsAt.IsZero }}
+          <div class="label-row">
+            <span class="label-key">Résolu à</span>
+            <span class="label-value">{{ .EndsAt.Format "02/01/2006 15:04:05" }}</span>
+          </div>
+          {{ end }}{{ end }}
+
+          {{- /* Bloc contextuel adapté selon FIRING ou RESOLVED */}}
+          {{ if eq .Status "resolved" }}
+          <div class="detail-box detail-resolved">
+            ✅ <strong>Alerte résolue</strong> — Le problème a été corrigé ou s'est résolu automatiquement.
+            {{ if .Labels.service }}Le service <strong>{{ .Labels.service }}</strong> est de nouveau opérationnel.{{ end }}
+          </div>
+          {{ else }}
+          {{ if .Annotations.description }}
+          <div class="detail-box detail-firing">
+            {{ .Annotations.description }}
+          </div>
+          {{ end }}
+          {{ end }}
+
+        </div>
+      </div>
+      {{ end }}
+
+      <div style="margin-top:16px;">
+        <a href="{{ .ExternalURL }}"
+        style="display:inline-block;margin-right:10px;padding:10px 20px;background-color:#1565c0;color:#ffffff !important;text-decoration:none;border-radius:4px;font-size:13px;font-family:Arial,sans-serif;">
+          Voir dans Alertmanager
+        </a>
+        <!-- En production : remplace localhost:3000 par l'IP/hostname réel de Grafana -->
+        <a href="http://localhost:3000/d/db9a3319-9386-4c00-abd1-55311b025c9d/first-dashboard" 
+        style="display:inline-block;padding:10px 20px;background-color:#e65100;color:#ffffff !important;text-decoration:none;border-radius:4px;font-size:13px;font-family:Arial,sans-serif;">
+          Voir dans Grafana
+        </a>
+      </div>
+    </div>
+    <div class="footer">Plateforme d'observabilité — Système automatique, ne pas répondre</div>
+  </div>
+</body>
+</html>
+{{ end }}

@@ -1,0 +1,319 @@
+apiVersion: 1
+
+groups:
+    - orgId: 1
+      name: batch-monitoring
+      folder: Observabilite
+      interval: 1m
+      rules:
+        - uid: b7e49f2a-4aee-4120-9eb2-0a7e17e5e82e
+          title: Batch silencieux
+          condition: C
+          data:
+            - refId: A
+              datasourceUid: loki
+              relativeTimeRange:
+                from: 600
+                to: 0
+              model:
+                editorMode: code
+                expr: 'sum by (service, host) (count_over_time({job="fluent-bit", type="batch"} [3m]))'
+                legendFormat: '{{service}} — {{host}}'
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                expression: A
+                reducer: last
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                expression: B
+                type: threshold
+                conditions:
+                    - evaluator: { params: [1], type: lt }
+                      operator: { type: and }
+                      query: { params: [B] }
+                      type: query
+          noDataState: Alerting
+          execErrState: Alerting
+          for: 2m
+          annotations:
+            summary: "Batch silencieux — {{ $labels.service }} sur {{ $labels.host }}"
+            description: |
+              Aucun job batch détecté depuis 3 min sur {{ $labels.service }} ({{ $labels.host }}).
+              Causes possibles : crash du process, exception non gérée, verrou base de données, ressources insuffisantes.
+              Action : vérifier l'état du process, les logs d'erreur, et les connexions à la base de données.
+              Requête Loki pour voir le dernier batch : {job="fluent-bit", service="{{ $labels.service }}", type="batch"}
+          labels:
+            env: dev
+            severity: warning
+            type: batch-health
+
+    - orgId: 1
+      name: http-monitoring
+      folder: Observabilite
+      interval: 10s
+      rules:
+        - uid: b2b170f7-e5ac-4d91-ad4d-6105d8b16f76
+          title: Taux d'erreurs 5xx élevé
+          condition: C
+          data:
+            - refId: A
+              datasourceUid: loki
+              relativeTimeRange:
+                from: 300
+                to: 0
+              model:
+                editorMode: code
+                expr: |
+                  sum by (service, host, endpoint, exception) (
+                    count_over_time(
+                      {job="fluent-bit"}
+                      |~ "(?:Response (?:Code : )?|Statut r[eé]ponse: )5[0-9][0-9]"
+                      | regexp `(?:Request URI : |HTTP (?:GET|POST|PUT|DELETE|PATCH) https?://[^/]+|Requ[eê]te: https?://[^/]+)(?P<endpoint>/[^\s?"&\n]+)`
+                      | regexp `Exception : (?P<exception>[A-Za-z]+(?:Exception|Error))`
+                      [3m]
+                    )
+                  )
+                legendFormat: '{{service}} — {{host}} — {{endpoint}}'
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                expression: A
+                reducer: last
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                expression: B
+                type: threshold
+                conditions:
+                    - evaluator: { params: [2], type: gt }
+                      operator: { type: and }
+                      query: { params: [B] }
+                      type: query
+          noDataState: NoData
+          execErrState: Error
+          for: 30s
+          annotations:
+            summary: "Erreurs 5xx — {{ $labels.service }} / {{ $labels.endpoint }} sur {{ $labels.host }}"
+            description: |
+              2 ou plus erreurs 5xx en 3 min
+              Service : {{ $labels.service }} | Serveur : {{ $labels.host }} | Endpoint : {{ $labels.endpoint }}
+              Exception : {{ $labels.exception }}
+              Requête Loki : {job="fluent-bit", service="{{ $labels.service }}", host="{{ $labels.host }}"} |= "ERROR" |~ "Exception|Error|Caused by"
+          labels:
+            env: dev
+            severity: critical
+            type: http-error-rate
+
+        - uid: d4e5f6a7-1234-4567-89ab-cdef01234567
+          title: Taux d'erreurs 4xx élevé
+          condition: C
+          data:
+            - refId: A
+              datasourceUid: loki
+              relativeTimeRange:
+                from: 300
+                to: 0
+              model:
+                editorMode: code
+                expr: |
+                  sum by (service, host, endpoint) (
+                    count_over_time(
+                      {job="fluent-bit"}
+                      |~ "(?:Response (?:Code : )?|Statut r[eé]ponse: )4[0-9][0-9]"
+                      | regexp `(?:Request URI : |HTTP (?:GET|POST|PUT|DELETE|PATCH) https?://[^/]+|Requ[eê]te: https?://[^/]+)(?P<endpoint>/[^\s?"&\n]+)`
+                      [3m]
+                    )
+                  )
+                legendFormat: '{{service}} — {{host}} — {{endpoint}}'
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                expression: A
+                reducer: last
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                expression: B
+                type: threshold
+                conditions:
+                    - evaluator: { params: [5], type: gt }
+                      operator: { type: and }
+                      query: { params: [B] }
+                      type: query
+          noDataState: NoData
+          execErrState: Error
+          for: 1m
+          annotations:
+            summary: "Erreurs 4xx — {{ $labels.service }} / {{ $labels.endpoint }} sur {{ $labels.host }}"
+            description: |
+              Plus de 5 erreurs 4xx en 3 min | Service : {{ $labels.service }} | Serveur : {{ $labels.host }} | Endpoint : {{ $labels.endpoint }}
+              Causes possibles : tokens expirés (401), permissions insuffisantes (403), mauvaise URL (404), données invalides (422).
+              Requête Loki : {job="fluent-bit", service="{{ $labels.service }}", host="{{ $labels.host }}"} |~ "(?:Response|Statut réponse).*4"
+          labels:
+            env: dev
+            severity: warning
+            type: http-error-rate-4xx
+
+    - orgId: 1
+      name: service-health
+      folder: Observabilite
+      interval: 10s
+      rules:
+        - uid: b42fbe31-988e-466d-b7d7-821cedc11bd1
+          title: Service silencieux
+          condition: C
+          data:
+            - refId: A
+              datasourceUid: prometheus
+              relativeTimeRange:
+                from: 300
+                to: 0
+              model:
+                expr: |
+                  label_replace(
+                    up{job="spring-actuator"},
+                    "service", "$1", "instance", "mock-([^:]+):.*"
+                  )
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                expression: A
+                reducer: last
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                expression: B
+                type: threshold
+                conditions:
+                    - evaluator: { params: [1], type: lt }
+                      operator: { type: and }
+                      query: { params: [B] }
+                      type: query
+          noDataState: Alerting
+          execErrState: Alerting
+          for: 0s
+          annotations:
+            summary: "Service DOWN — {{ $labels.service }} sur {{ $labels.instance }}"
+            description: |
+              Service {{ $labels.service }} ne répond plus sur {{ $labels.instance }}.
+
+              Étape 1 — Les alertes 5xx/4xx déclenchées juste avant contiennent l'exception exacte.
+              Consulter l'historique des alertes pour {{ $labels.service }} dans les 10 dernières minutes.
+
+              Étape 2 — Dernières erreurs applicatives avant l'arrêt (Loki) :
+              {job="fluent-bit", service="{{ $labels.service }}"} | level=~"ERROR|WARN"
+
+              Étape 3 — Si aucune erreur dans les logs, le process a crashé sans trace applicative.
+              Causes possibles : OOM Killer, signal SIGKILL, espace disque plein, crash matériel.
+              Vérifier : dmesg | grep -i "kill\|oom", df -h, journalctl -u {{ $labels.service }}
+
+              Tous les logs du service : {job="fluent-bit", service="{{ $labels.service }}"}
+          labels:
+            env: dev
+            severity: critical
+            type: service-health
+
+        # Le backoffice n'a pas d'Actuator → on probe /health directement
+        - uid: f7e8d9c0-1234-4321-abcd-876543210fed
+          title: Backoffice silencieux
+          condition: C
+          data:
+            - refId: A
+              datasourceUid: prometheus
+              relativeTimeRange:
+                from: 300
+                to: 0
+              model:
+                expr: |
+                  probe_success{job="blackbox-health",
+                    instance="http://mock-backoffice:8080/health"}
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                expression: A
+                reducer: last
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                expression: B
+                type: threshold
+                conditions:
+                    - evaluator: { params: [1], type: lt }
+                      operator: { type: and }
+                      query: { params: [B] }
+                      type: query
+          noDataState: Alerting
+          execErrState: Alerting
+          for: 0s
+          annotations:
+            summary: "Backoffice DOWN — {{ $labels.instance }}"
+            description: |
+              Le backoffice PHP ne répond plus sur {{ $labels.instance }}.
+
+              Étape 1 — Dernières erreurs applicatives avant l'arrêt (Loki) :
+              {job="fluent-bit", service="backoffice"} | level=~"ERROR|WARNING"
+
+              Étape 2 — Si aucune erreur dans les logs, le process PHP/Laravel a crashé sans trace.
+              Causes possibles : exception PHP fatale non catchée, mémoire épuisée, process tué.
+              Vérifier : /var/log/nginx/error.log, /var/log/php-fpm/error.log, dmesg | grep -i oom
+
+              Tous les logs du backoffice : {job="fluent-bit", service="backoffice"}
+          labels:
+            env: dev
+            severity: critical
+            type: service-health
+
+    - orgId: 1
+      name: http-monitoring-prometheus
+      folder: Observabilite
+      interval: 10s
+      rules:
+        - uid: e5f6a7b8-2345-5678-90bc-def012345678
+          title: Taux d'erreurs 5xx (Prometheus - backup fiable)
+          isPaused: true
+          condition: C
+          data:
+            - refId: A
+              datasourceUid: prometheus
+              relativeTimeRange:
+                from: 300
+                to: 0
+              model:
+                expr: |
+                  increase(
+                    http_requests_total{job="spring-actuator", status="500"}[3m]
+                  ) > 3
+            - refId: B
+              datasourceUid: __expr__
+              model:
+                expression: A
+                reducer: last
+                type: reduce
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                expression: B
+                type: threshold
+                conditions:
+                    - evaluator: { params: [0], type: gt }
+                      operator: { type: and }
+                      query: { params: [B] }
+                      type: query
+          noDataState: NoData
+          execErrState: Error
+          for: 2m
+          annotations:
+            summary: "5xx Prometheus — {{ $labels.service }} sur {{ $labels.instance }}"
+            description: |
+              Désactivée — remplacée par l'alerte Loki 5xx plus précise.
+          labels:
+            env: dev
+            severity: critical
+            type: http-error-rate-prometheus

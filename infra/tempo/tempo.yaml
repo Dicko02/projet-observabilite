@@ -1,0 +1,44 @@
+# Configuration Tempo — Backend de traces distribuees
+# Port 3200 : HTTP API (Grafana se connecte ici)
+# Port 4317 : OTLP gRPC receiver (applications instrumentees envoient ici)
+# Port 4318 : OTLP HTTP receiver (alternative HTTP)
+# IMPORTANT : grpc_listen_port du serveur DOIT etre different du receiver OTLP (4317)
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 72h  # Augmenté de 48h à 72h pour plus de flexibilité en V0.1
+
+# Metrics Generator - Generates RED metrics from traces (Phase 1)
+metrics_generator:
+  storage:
+    path: /var/tempo/metrics-generator
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+querier:
+  frontend_worker:
+    frontend_address: localhost:9095

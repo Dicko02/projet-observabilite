@@ -1,0 +1,46 @@
+# Configuration de Loki, le système de stockage de logs. Ce fichier est monté dans le container Loki pour lui indiquer comment se comporter.
+
+# Désactive l'authentification pour simplifier la configuration.
+# En production, il faudrait l'activer et configurer des utilisateurs et des permissions.
+auth_enabled: false
+
+# Configure le serveur Loki pour écouter sur les ports 3100 (HTTP) et 9096 (gRPC).
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+
+# Configure le stockage des logs.
+# Ici on utilise le stockage local sur le filesystem, avec les répertoires pour les chunks de données et les règles d'indexation.
+common:
+  # le dossier racine dans le container où Loki va écrire. C'est le même "/loki" qu'on a mappé vers le volume "loki-data" dans le "docker-compose".
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks # où Loki stocke les données de logs
+      rules_directory: /loki/rules # où Loki stocke les règles d'indexation
+  replication_factor: 1 # pas de réplication pour simplifier, en production on voudrait au moins 3 pour la résilience
+  ring:
+    kvstore:
+      store: inmemory # pas de stockage de l'état du cluster pour simplifier, en production on utiliserait Consul ou etcd
+
+
+# Configure les règles de schéma pour l'indexation des logs. Ici on utilise le "boltdb-shipper" qui stocke les index dans des fichiers sur le filesystem.
+schema_config:
+  configs:
+    - from: 2020-10-24 # date à partir de laquelle cette configuration de schéma est appliquée
+      store: boltdb-shipper # le moteur d'indexation utilisé
+      object_store: filesystem # le type de stockage pour les index, ici sur le filesystem
+      schema: v11 # la version du schéma, ça permet de faire évoluer la structure des index dans le temps
+
+      # les règles d'indexation, ici on crée un index par jour avec le préfixe "index_"(Ça permet de faire du time-based indexing pour améliorer les performances de recherche)
+      index:
+        prefix: index_ # le préfixe des fichiers d'index
+        period: 24h # la période de rotation des index, ici tous les jours(tous les 24h un nouvel index est créé)
+
+
+# Configure les limites d'ingestion et de rétention des logs
+limits_config:
+  retention_period: 744h # durée de rétention des logs, ici 31 jours (744 heures)
+  ingestion_rate_mb: 16 # taux d'ingestion maximum en mégaoctets par seconde pour éviter de surcharger le système
+  ingestion_burst_size_mb: 32 # taille maximale du burst d'ingestion en mégaoctets, pour permettre des pics d'ingestion sans rejeter les logs

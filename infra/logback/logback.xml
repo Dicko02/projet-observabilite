@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- =============================================== -->
+    <!-- LOGBACK CONFIG - Intégration OpenTelemetry      -->
+    <!-- =============================================== -->
+    <!-- 
+    Cette configuration Logback inclut le trace_id généré par OpenTelemetry
+    dans chaque log, permettant la corrélation logs <-> traces dans Grafana.
+    
+    Le trace_id est injecté dans le Mapped Diagnostic Context (MDC)
+    par OpenTelemetry Instrumentation.
+    -->
+
+    <!-- Properties -->
+    <property name="LOG_FILE" value="/logs/middleware.log"/>
+    <property name="LOG_DIR" value="/logs"/>
+
+    <!-- Define pattern avec trace_id -->
+    <property name="PATTERN">
+        %d{ISO8601} %X{traceId} [%thread] %-5level %logger{36} - %msg%n
+    </property>
+
+    <!-- Console Appender - Development -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <layout class="ch.qos.logback.classic.PatternLayout">
+            <pattern>${PATTERN}</pattern>
+        </layout>
+    </appender>
+
+    <!-- File Appender - for Fluent-bit collection -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- Roll file every day or when it reaches 10MB -->
+            <fileNamePattern>${LOG_DIR}/middleware-%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- Async Appender for better performance -->
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <appender-ref ref="FILE"/>
+    </appender>
+
+    <!-- Root Logger -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+        <appender-ref ref="ASYNC"/>
+    </root>
+
+    <!-- Spring Boot loggers -->
+    <logger name="org.springframework" level="INFO"/>
+    <logger name="org.springframework.boot" level="INFO"/>
+    
+    <!-- Application loggers -->
+    <logger name="cn.cms.transact.logger" level="DEBUG"/>
+    <logger name="cn.cms.security.filters" level="DEBUG"/>
+
+</configuration>

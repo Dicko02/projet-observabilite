@@ -1,0 +1,75 @@
+
+global:
+  resolve_timeout: 5m
+  # Configuration SMTP Gmail
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'dickfack123@gmail.com'
+  smtp_auth_username: 'dickfack123@gmail.com'
+  # Le mot de passe d'application Gmail généré
+  smtp_auth_password: 'fbla yanv ibjz tmmn'
+  smtp_require_tls: true
+
+# Chemin vers les templates personnalisés
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+
+# Routing : comment les alertes sont distribuées selon leurs labels
+route:
+  group_by: ['alertname']
+  # TEMPS D'ATTENTE RÉDUIT À 0 POUR UN ENVOI IMMÉDIAT
+  group_wait: 0s
+  group_interval: 1m
+  repeat_interval: 1h
+  receiver: 'email-default'
+
+  routes:
+    # Supprimer les alertes internes Grafana des emails
+    - match:
+        alertname: DatasourceNoData
+      receiver: 'null'
+      continue: false
+
+    # Les alertes critiques (dont Service Silencieux)
+    - match:
+        severity: critical
+      receiver: 'email-critical'
+      repeat_interval: 1h
+
+    # Les alertes warning
+    - match:
+        severity: warning
+      receiver: 'email-warning'
+      repeat_interval: 1h30m
+
+receivers:
+  # Receiver "null" pour ignorer les alertes non pertinentes
+  - name: 'null'
+
+  # Receiver par défaut pour les alertes sans label de sévérité
+  - name: 'email-default'
+    email_configs:
+      - to: 'dickfack123@gmail.com'
+        headers:
+          subject: '{{ template "email.custom.subject" . }}'
+        html: '{{ template "email.custom.html" . }}'
+        send_resolved: true
+
+  # Receiver pour les alertes critiques
+  - name: 'email-critical'
+    email_configs:
+      - to: 'dickfack123@gmail.com'
+        headers:
+          subject: '{{ template "email.custom.subject" . }}'
+        html: '{{ template "email.custom.html" . }}'
+        send_resolved: true
+
+  # Receiver pour les alertes warning
+  - name: 'email-warning'
+    email_configs:
+      - to: 'dickfack123@gmail.com'
+        headers:
+          subject: '{{ template "email.custom.subject" . }}'
+        html: '{{ template "email.custom.html" . }}'
+        send_resolved: true
+        

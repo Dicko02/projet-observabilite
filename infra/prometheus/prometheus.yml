@@ -1,0 +1,68 @@
+# Ce fichier de configuration définit les paramètres globaux de Prometheus, les cibles à surveiller pour la collecte des métriques, les règles d'alerte et la configuration d'Alertmanager. Il est monté dans le container Docker de Prometheus pour lui indiquer comment se comporter et où trouver les informations nécessaires pour collecter les métriques et gérer les alertes.
+
+# les paramètres qui s'appliquent à tous les jobs
+global:
+  scrape_interval: 5s # intervalle de temps réduit pour une réactivité maximale
+  scrape_timeout: 4s # doit obligatoirement être inférieur ou égal au scrape_interval
+  evaluation_interval: 5s # évaluation plus fréquente des règles d'alerte
+
+
+scrape_configs:
+
+  # Prometheus se surveille lui-même
+  - job_name: "prometheus" # nom du job, utilisé pour identifier les métriques collectées par ce job
+    static_configs: # configuration statique des cibles à surveiller pour ce job
+      - targets: ["localhost:9090"] # liste des cibles à surveiller, ici Prometheus lui-même sur le port 9090
+
+  # Métriques système (Node Exporter)
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          env: dev
+
+  # Métriques applicatives (simulation Actuator Spring Boot)
+  - job_name: "spring-actuator"
+    metrics_path: "/actuator/prometheus"
+    static_configs:
+      - targets:
+          - "mock-middle:8080"
+          - "mock-addon-voucher:8080"
+          - "mock-addon-partenaire:8080"
+          - "mock-addons-om:8080"
+          - "mock-addons-wave:8080"
+        labels:
+          env: dev
+
+  - job_name: "blackbox-health"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://mock-middle:8080/actuator/prometheus
+          - http://mock-addon-voucher:8080/actuator/prometheus
+          - http://mock-addon-partenaire:8080/actuator/prometheus
+          - http://mock-addons-om:8080/actuator/prometheus
+          - http://mock-addons-wave:8080/actuator/prometheus
+          - http://mock-backoffice:8080/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+
+# indique à Prometheus où envoyer les alertes déclenchées
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093" # on utilise le nom du container Docker, pas localhost
+
+
+# indique à Prometheus où trouver les règles d'alerte
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
